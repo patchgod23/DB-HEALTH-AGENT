@@ -1,0 +1,75 @@
+services:
+
+  # ─────────────────────────────────────────
+  # Health Agent — single scan (default)
+  # ─────────────────────────────────────────
+  agent:
+    build: ./backend
+    image: db-health-agent-backend:latest
+    container_name: db-health-agent
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend/logs:/app/logs
+      - ./backend/servers.yaml:/app/servers.yaml:ro
+      - ./backend/app:/app/app:ro
+      - ./backend/main.py:/app/main.py:ro
+    ports:
+      - "8000:8000"
+    command: python main.py
+    restart: "no"
+
+  # ─────────────────────────────────────────
+  # Health Agent — continuous loop
+  # ─────────────────────────────────────────
+  agent-loop:
+    build: ./backend
+    image: db-health-agent-backend:latest
+    container_name: db-health-agent-loop
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend/logs:/app/logs
+      - ./backend/servers.yaml:/app/servers.yaml:ro
+      - ./backend/app:/app/app:ro
+      - ./backend/main.py:/app/main.py:ro
+    ports:
+      - "8000:8000"
+    command: python main.py --loop
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # Health Agent API — Read-only state reader
+  # ─────────────────────────────────────────
+  api:
+    build: ./backend
+    image: db-health-agent-backend:latest
+    container_name: db-health-agent-api
+    volumes:
+      - ./backend/logs:/app/logs:ro
+      - ./backend/api:/app/api:ro
+    ports:
+      - "8080:8080"
+    command: python api/main.py
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # Health Agent Frontend — UI Console
+  # ─────────────────────────────────────────
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: db-health-agent-frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    restart: unless-stopped

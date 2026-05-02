@@ -1,0 +1,51 @@
+# servers.yaml — db-health-agent server configuration
+# Define your server list here (structure only — no credentials).
+
+thresholds:
+  latency_warning_ms: 1000
+  latency_critical_ms: 3000
+  freshness_warning_hours: 24
+  freshness_critical_hours: 48
+  rowcount_warning_drop_pct: 10
+  rowcount_critical_drop_pct: 30
+  connect_timeout_sec: 5
+  error_warning_count: 5
+  error_critical_count: 20
+
+log_dir: logs
+log_format: json
+run_interval_sec: 60
+alert_on_recovery: true
+
+servers:
+  - id: prod-main
+    host: changeme
+    port: 1433
+    database: MAXPOINT_K001
+    username: sa
+    password: ""
+    enabled: true
+    heuristic_profile: rolling
+    ignore_freshness_tables:
+      - Canal_Impresora_Estacion
+      - Estacion
+      - Menu
+    table_profiles:
+      Auditoria_Transaccion: rolling
+      Promociones: derived_state
+
+  - id: branch-norte
+    host: 127.0.0.1
+    database: SucursalNorteDB
+    username: sa
+    password: ""
+    enabled: true
+    heuristic_profile: static
+
+  - id: warehouse-east
+    host: 127.0.0.1
+    database: LogisticaEast
+    username: sa
+    password: ""
+    enabled: true
+    heuristic_profile: derived_state
