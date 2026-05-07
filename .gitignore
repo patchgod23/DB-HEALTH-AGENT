@@ -12,10 +12,14 @@ ENV/
 
 # Project Specific
 backend/logs/
+backend/servers.yaml
 backend/state.db
+logs/
+*.log
 frontend/node_modules/
 frontend/dist/
 
 # OS
 .DS_Store
 Thumbs.db
+"backend/db/*.sql" 

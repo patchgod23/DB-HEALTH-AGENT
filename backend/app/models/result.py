@@ -45,6 +45,7 @@ class ServerDiagnosis(BaseModel):
     checks: list[CheckResult] = Field(default_factory=list)
     summary: str = ""
     llm_narrative: Optional[str] = None
+    recommended_actions: list[str] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     total_duration_ms: Optional[float] = None
 

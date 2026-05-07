@@ -35,15 +35,23 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_rowcount_server_table ON rowcount_history(server_id, table_name)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_rowcount_timestamp ON rowcount_history(timestamp)")
     
-    # Table for LLM caching
+    # Table for LLM caching (Added recommended_actions column)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS llm_cache (
             server_id TEXT PRIMARY KEY,
             context_hash TEXT NOT NULL,
             narrative TEXT NOT NULL,
+            recommended_actions TEXT,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # Migration: check if recommended_actions column exists
+    cursor.execute("PRAGMA table_info(llm_cache)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if "recommended_actions" not in columns:
+        logger.info("Migrando llm_cache: Añadiendo columna recommended_actions")
+        cursor.execute("ALTER TABLE llm_cache ADD COLUMN recommended_actions TEXT")
     
     conn.commit()
     conn.close()
@@ -72,10 +80,7 @@ def save_rowcounts(server_id: str, current_counts: dict[str, int]):
     conn.close()
 
 def get_rowcount_baselines(server_id: str, table_name: str) -> dict[str, int]:
-    """
-    Fetch baseline row counts for specific time windows.
-    Returns dict with keys: 't_prev', 't_1h', 't_24h'
-    """
+    """Fetch baseline row counts for specific time windows."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -85,7 +90,6 @@ def get_rowcount_baselines(server_id: str, table_name: str) -> dict[str, int]:
     
     baselines = {"t_prev": None, "t_1h": None, "t_24h": None}
     
-    # Get immediate previous run (T-1)
     cursor.execute("""
         SELECT row_count FROM rowcount_history 
         WHERE server_id = ? AND table_name = ?
@@ -95,7 +99,6 @@ def get_rowcount_baselines(server_id: str, table_name: str) -> dict[str, int]:
     if row is not None:
         baselines["t_prev"] = row[0]
         
-    # Get count closest to 1 hour ago (T-1h)
     cursor.execute("""
         SELECT row_count FROM rowcount_history 
         WHERE server_id = ? AND table_name = ? AND timestamp <= ?
@@ -105,7 +108,6 @@ def get_rowcount_baselines(server_id: str, table_name: str) -> dict[str, int]:
     if row is not None:
         baselines["t_1h"] = row[0]
         
-    # Get count closest to 24 hours ago (T-24h)
     cursor.execute("""
         SELECT row_count FROM rowcount_history 
         WHERE server_id = ? AND table_name = ? AND timestamp <= ?
@@ -119,7 +121,7 @@ def get_rowcount_baselines(server_id: str, table_name: str) -> dict[str, int]:
     return baselines
 
 def _extract_entities(check: Any) -> list[str]:
-    """Extrae nombres de tablas limpias (sin números que muten) de los valores del check."""
+    """Extrae nombres de tablas limpias de los valores del check."""
     entities = set()
     if not isinstance(check.value, dict):
         return []
@@ -127,19 +129,16 @@ def _extract_entities(check: Any) -> list[str]:
     if check.check_name == "row_count":
         for key in ["critical", "warning", "empty"]:
             for item in check.value.get(key, []):
-                # Formato: "NombreTabla (100 -> 0)" -> "NombreTabla"
                 table = item.split(" ")[0] if " " in item else item
                 entities.add(table)
                 
     elif check.check_name == "data_freshness":
         for key in ["critical", "warning"]:
             for item in check.value.get(key, []):
-                # Formato: "NombreTabla (última..." -> "NombreTabla"
                 table = item.split(" ")[0] if " " in item else item
                 entities.add(table)
                 
     elif check.check_name == "error_patterns":
-        # Formato: dict con 'failed_jobs', 'blocked_sessions'
         if check.value.get("failed_jobs"):
             entities.add("jobs_fallidos")
         if check.value.get("blocked_sessions"):
@@ -147,63 +146,91 @@ def _extract_entities(check: Any) -> list[str]:
             
     return sorted(list(entities))
 
-
-def get_cached_llm_narrative(server_id: str, diagnosis: Any) -> Optional[str]:
+def get_cached_llm_narrative(server_id: str, diagnosis: Any) -> Optional[dict[str, Any]]:
     """Check if the severity state vector + incident fingerprint matches the last LLM response."""
-    # Fingerprint: Severidad + Entidades Afectadas (sin métricas exactas que muten)
+    def get_val(obj, attr, default=None):
+        if isinstance(obj, dict):
+            return obj.get(attr, default)
+        return getattr(obj, attr, default)
+
+    def get_sev(obj):
+        sev = get_val(obj, "severity") or get_val(obj, "overall_severity")
+        return sev.value if hasattr(sev, "value") else sev
+
     fingerprint = {
-        "status": diagnosis.overall_severity.value,
+        "status": get_sev(diagnosis),
         "checks": {
-            c.check_name: {
-                "severity": c.severity.value,
-                "entities": _extract_entities(c)
-            } for c in diagnosis.checks
+            get_val(c, "check_name"): {
+                "severity": get_sev(c),
+                "value": get_val(c, "value"),
+                "entities": _extract_entities(c) if not isinstance(c, dict) else [] # Entities extractor needs object for now
+            } for c in get_val(diagnosis, "checks", [])
         }
     }
-    state_str = json.dumps(fingerprint, sort_keys=True)
+    state_str = json.dumps(fingerprint, sort_keys=True, default=str)
     current_hash = hashlib.sha256(state_str.encode('utf-8')).hexdigest()
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT context_hash, narrative FROM llm_cache WHERE server_id = ?
+        SELECT context_hash, narrative, recommended_actions FROM llm_cache WHERE server_id = ?
     """, (server_id,))
     row = cursor.fetchone()
     conn.close()
     
     if row and row[0] == current_hash:
-        logger.debug(f"[{server_id}] LLM Context Hash match (Estado estable). Retornando narrativa cacheada.")
-        return row[1]
+        narrative = row[1]
+        if not narrative or narrative.startswith("Error"):
+            return None
+            
+        return {
+            "narrative": narrative,
+            "recommended_actions": json.loads(row[2]) if row[2] else []
+        }
     
     return None
 
 def save_llm_narrative(server_id: str, diagnosis: Any, narrative: str):
     """Save the new incident fingerprint hash and narrative to SQLite."""
+    def get_val(obj, attr, default=None):
+        if isinstance(obj, dict):
+            return obj.get(attr, default)
+        return getattr(obj, attr, default)
+
+    def get_sev(obj):
+        sev = get_val(obj, "severity") or get_val(obj, "overall_severity")
+        return sev.value if hasattr(sev, "value") else sev
+
     fingerprint = {
-        "status": diagnosis.overall_severity.value,
+        "status": get_sev(diagnosis),
         "checks": {
-            c.check_name: {
-                "severity": c.severity.value,
-                "entities": _extract_entities(c)
-            } for c in diagnosis.checks
+            get_val(c, "check_name"): {
+                "severity": get_sev(c),
+                "value": get_val(c, "value"),
+                "entities": _extract_entities(c) if not isinstance(c, dict) else []
+            } for c in get_val(diagnosis, "checks", [])
         }
     }
-    state_str = json.dumps(fingerprint, sort_keys=True)
+    state_str = json.dumps(fingerprint, sort_keys=True, default=str)
     current_hash = hashlib.sha256(state_str.encode('utf-8')).hexdigest()
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     
+    actions = get_val(diagnosis, "recommended_actions", [])
+    actions_json = json.dumps(actions)
+    
     cursor.execute("""
-        INSERT INTO llm_cache (server_id, context_hash, narrative, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO llm_cache (server_id, context_hash, narrative, recommended_actions, updated_at)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(server_id) DO UPDATE SET 
             context_hash = excluded.context_hash,
             narrative = excluded.narrative,
+            recommended_actions = excluded.recommended_actions,
             updated_at = excluded.updated_at
-    """, (server_id, current_hash, narrative, now))
+    """, (server_id, current_hash, narrative, actions_json, now))
     
     conn.commit()
     conn.close()

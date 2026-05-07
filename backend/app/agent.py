@@ -19,7 +19,7 @@ from loguru import logger
 from app.alerts.notifier import notify_all
 from app.analyzer.rules import analyze
 from app.analyzer.llm import generate_diagnosis
-from app.checks import connectivity, latency, freshness, rowcount, errors
+from app.checks import connectivity, latency, freshness, rowcount, errors, db_size
 from app.config import AgentConfig, ServerConfig, Thresholds
 from app.models.result import ServerDiagnosis, Severity
 from app.storage.logger import HealthLogger
@@ -36,6 +36,7 @@ _CHECKS = [
     freshness.run,
     rowcount.run,
     errors.run,
+    db_size.run,
 ]
 
 
@@ -91,7 +92,8 @@ def _run_server_checks(
         final_diagnosis.llm_narrative = generate_diagnosis(
             final_diagnosis, 
             config_root.llm_api_key, 
-            config_root.llm_provider
+            config_root.llm_provider,
+            config_root.llm_model
         )
         
     return final_diagnosis
@@ -159,6 +161,9 @@ class HealthAgent:
         for d in diagnoses:
             if d.overall_severity in (Severity.CRITICAL, Severity.WARNING):
                 INCIDENTS_TOTAL.labels(server_id=d.server_id, severity=d.overall_severity.value).inc()
+            
+            if d.llm_narrative:
+                logger.info(f"\n[{d.server_id}] 🩺 DIAGNÓSTICO IA:\n{d.llm_narrative}\n")
 
         update_sqlite_size()
 

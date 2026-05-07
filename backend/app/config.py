@@ -10,11 +10,22 @@ import os
 from typing import Optional
 
 import yaml
+from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-load_dotenv()
+# Buscamos el .env en el directorio actual o en los padres (útil si se corre desde backend/)
+def _load_env_robustly():
+    current = Path(__file__).resolve().parent
+    for _ in range(3):
+        env_path = current / ".env"
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path)
+            return
+        current = current.parent
+    load_dotenv() # Fallback al default
 
+_load_env_robustly()
 
 class ServerConfig(BaseModel):
     """Configuration for a single monitored database server."""
@@ -55,18 +66,18 @@ class Thresholds(BaseModel):
     error_warning_count: int = int(os.getenv("ERROR_WARNING_COUNT", 5))
     error_critical_count: int = int(os.getenv("ERROR_CRITICAL_COUNT", 20))
 
-
 class AgentConfig(BaseModel):
     """Root configuration for the agent."""
 
     servers: list[ServerConfig] = Field(default_factory=list)
     thresholds: Thresholds = Field(default_factory=Thresholds)
     log_dir: str = os.getenv("LOG_DIR", "logs")
-    log_format: str = os.getenv("LOG_FORMAT", "json")  # json | sqlite
+    log_format: str = os.getenv("LOG_FORMAT", "json")
     run_interval_sec: int = int(os.getenv("RUN_INTERVAL_SEC", 60))
     alert_on_recovery: bool = os.getenv("ALERT_ON_RECOVERY", "true").lower() == "true"
     llm_api_key: Optional[str] = os.getenv("LLM_API_KEY")
-    llm_provider: str = os.getenv("LLM_PROVIDER", "gemini") # gemini or openai
+    llm_provider: str = os.getenv("LLM_PROVIDER", "gemini")
+    llm_model: str = os.getenv("LLM_MODEL", "google/gemini-2.0-flash-lite-preview-02-05:free")
 
 
 def load_config(path: str = "servers.yaml") -> AgentConfig:
@@ -76,17 +87,20 @@ def load_config(path: str = "servers.yaml") -> AgentConfig:
     """
     thresholds = Thresholds()
 
+    # Si no existe en la ruta dada, probamos en la raíz del proyecto
     if not os.path.exists(path):
-        return AgentConfig(thresholds=thresholds)
+        alt_path = Path(__file__).resolve().parent.parent / path
+        if alt_path.exists():
+            path = str(alt_path)
 
-    with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    raw = {}
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
 
     servers = []
     for srv in raw.get("servers", []):
         srv_id = srv.get("id", "").upper().replace("-", "_")
-        # Allow full connection override from env vars:
-        # DB_<ID>_HOST, DB_<ID>_PORT, DB_<ID>_DATABASE, DB_<ID>_USERNAME, DB_<ID>_PASSWORD
         for field, env_suffix in [
             ("host",     "HOST"),
             ("port",     "PORT"),
@@ -106,8 +120,11 @@ def load_config(path: str = "servers.yaml") -> AgentConfig:
     return AgentConfig(
         servers=servers,
         thresholds=thresholds,
-        log_dir=raw.get("log_dir", thresholds.model_fields["latency_warning_ms"].default),
-        log_format=raw.get("log_format", "json"),
-        run_interval_sec=raw.get("run_interval_sec", 60),
-        alert_on_recovery=raw.get("alert_on_recovery", True),
+        log_dir=raw.get("log_dir", os.getenv("LOG_DIR", "logs")),
+        log_format=raw.get("log_format", os.getenv("LOG_FORMAT", "json")),
+        run_interval_sec=raw.get("run_interval_sec", int(os.getenv("RUN_INTERVAL_SEC", 60))),
+        alert_on_recovery=raw.get("alert_on_recovery", os.getenv("ALERT_ON_RECOVERY", "true").lower() == "true"),
+        llm_api_key=raw.get("llm_api_key", os.getenv("LLM_API_KEY")),
+        llm_provider=raw.get("llm_provider", os.getenv("LLM_PROVIDER", "gemini")),
+        llm_model=raw.get("llm_model", os.getenv("LLM_MODEL", "google/gemini-2.0-flash-lite-preview-02-05:free")),
     )

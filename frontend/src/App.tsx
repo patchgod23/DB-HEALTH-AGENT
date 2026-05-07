@@ -31,6 +31,7 @@ interface ServerDetailData {
     overall_severity: Severity;
     timestamp: string;
     checks: CheckResult[];
+    recommended_actions?: string[];
   };
   ai_context?: {
     narrative: string;
@@ -112,8 +113,11 @@ function FleetOverview() {
 
 function ServerDetail({ params }: { params: { id: string } }) {
   const [, setLocation] = useLocation();
-  const [showAI, setShowAI] = useState(false);
+  const [showAI, setShowAI] = useState(true);
+  const [chatMessage, setChatMessage] = useState('');
   const { id } = params;
+  const [messages, setMessages] = useState<{role: 'user' | 'ai', text: string, execution?: any}[]>([]);
+  const [isSending, setIsSending] = useState(false);
 
   const { data, isLoading, error } = useQuery<ServerDetailData>({
     queryKey: ['server', id],
@@ -124,6 +128,30 @@ function ServerDetail({ params }: { params: { id: string } }) {
   if (error || !data) return <div className="badge badge-critical">SERVER NOT FOUND</div>;
 
   const { state, ai_context } = data;
+
+  const handleSendMessage = () => {
+    if (!chatMessage || isSending) return;
+    
+    const userMsg = chatMessage;
+    setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    setChatMessage('');
+    setIsSending(true);
+
+    fetch(`/api/chat?server_id=${id}&message=${encodeURIComponent(userMsg)}`, { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        setMessages(prev => [...prev, { 
+          role: 'ai', 
+          text: data.response, 
+          execution: data.executed ? data.execution_result : null 
+        }]);
+        setIsSending(false);
+      })
+      .catch(err => {
+        setMessages(prev => [...prev, { role: 'ai', text: "Error de conexión con el Veterano." }]);
+        setIsSending(false);
+      });
+  };
 
   return (
     <div className="detail-grid">
@@ -141,6 +169,35 @@ function ServerDetail({ params }: { params: { id: string } }) {
         <h1 style={{ fontSize: '20px', fontWeight: 600, wordBreak: 'break-all' }}>{state.server_id}</h1>
         <p className="text-secondary" style={{ fontSize: '12px' }}>{state.host} / {state.database}</p>
       </header>
+      
+      {state.recommended_actions && state.recommended_actions.length > 0 && (
+        <section className="maintenance-box">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+            <AlertCircle size={18} color="var(--status-warning)" />
+            <strong style={{ fontSize: '14px' }}>Mantenimiento Sugerido por el Agente:</strong>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {state.recommended_actions.map(action => (
+              <div key={action} className="maintenance-item">
+                <code style={{ fontSize: '12px' }}>{action}</code>
+                <button 
+                  className="btn-run"
+                  onClick={() => {
+                    if (confirm(`¿Estás seguro de ejecutar ${action} en ${state.database}?`)) {
+                      fetch(`/api/maintenance/run?server_id=${state.server_id}&script_name=${action}`, { method: 'POST' })
+                        .then(res => res.json())
+                        .then(data => alert(data.message || data.error))
+                        .catch(err => alert("Error: " + err));
+                    }
+                  }}
+                >
+                  Ejecutar ahora
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="detail-section">
         <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '12px', letterSpacing: '0.5px' }}>
@@ -169,7 +226,7 @@ function ServerDetail({ params }: { params: { id: string } }) {
         ))}
       </section>
 
-      {/* Fase C: AI Narrative - Collapsed by default */}
+      {/* Fase C: AI Narrative */}
       {ai_context && (
         <div className="ai-narrative-panel">
           <div 
@@ -177,15 +234,52 @@ function ServerDetail({ params }: { params: { id: string } }) {
             onClick={() => setShowAI(!showAI)}
           >
             <BrainCircuit size={16} color="#4ade80" />
-            <span style={{ fontWeight: 600, fontSize: '13px', flex: 1 }}>AI Interpretation (Insights)</span>
+            <span style={{ fontWeight: 600, fontSize: '13px', flex: 1 }}>AI Interpretation & Interactive Chat</span>
             {showAI ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           </div>
           
           {showAI && (
-            <div style={{ marginTop: '16px', lineHeight: 1.6, color: 'var(--text-primary)', fontSize: '14px' }}>
-              {ai_context.narrative}
-              <div style={{ marginTop: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                Fingerprint hash updated at: {new Date(ai_context.updated_at).toLocaleString()}
+            <div style={{ marginTop: '16px' }}>
+              {/* Mensaje inicial de la IA (el diagnóstico cacheado) */}
+              <div className="message-bubble message-ai" style={{ marginBottom: '20px', maxWidth: '100%' }}>
+                {ai_context.narrative}
+                <div style={{ marginTop: '8px', fontSize: '10px', opacity: 0.7 }}>
+                  Último diagnóstico automático: {new Date(ai_context.updated_at).toLocaleString()}
+                </div>
+              </div>
+
+              {/* Historial de conversación */}
+              <div className="chat-messages">
+                {messages.map((msg, idx) => (
+                  <div key={idx} className={`message-bubble message-${msg.role}`}>
+                    {msg.text}
+                    {msg.execution && (
+                      <div className={`execution-status ${msg.execution.success ? 'execution-success' : 'execution-error'}`}>
+                        {msg.execution.success ? '✓ ' : '✗ '}
+                        {msg.execution.message || msg.execution.error}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Input de Chat */}
+              <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                <input 
+                  type="text" 
+                  className="chat-input"
+                  placeholder="Habla con el Veterano o pide ejecutar un script..."
+                  value={chatMessage}
+                  onChange={(e) => setChatMessage(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                />
+                <button 
+                  className="btn-run" 
+                  disabled={isSending || !chatMessage}
+                  onClick={handleSendMessage}
+                >
+                  {isSending ? '...' : 'Enviar'}
+                </button>
               </div>
             </div>
           )}

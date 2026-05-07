@@ -58,7 +58,7 @@ class DBConnection:
 
         start = time.perf_counter()
         try:
-            self._conn = pyodbc.connect(conn_str, timeout=self.timeout)
+            self._conn = pyodbc.connect(conn_str, timeout=self.timeout, autocommit=True)
         except pyodbc.Error as exc:
             raise DBConnectionError(
                 f"Cannot connect to [{self.config.id}] {self.config.host}: {exc}"
@@ -79,7 +79,17 @@ class DBConnection:
         try:
             cursor = self._conn.cursor()
             cursor.execute(sql, params)
-            rows = cursor.fetchall()
+            
+            rows = []
+            try:
+                # Solo intentamos fetchall si hay resultados pendientes (evita error en DELETE/DBCC)
+                if cursor.description:
+                    rows = cursor.fetchall()
+            except pyodbc.Error as e:
+                # Si el error es "No results. (0) (SQLFetch)", lo ignoramos para comandos DML/DDL
+                if "No results" not in str(e):
+                    raise
+            
             duration_ms = (time.perf_counter() - start) * 1000
             return rows, duration_ms
         except Exception as exc:

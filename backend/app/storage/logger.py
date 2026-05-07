@@ -90,6 +90,8 @@ class HealthLogger:
             "database": diagnosis.database,
             "overall_severity": diagnosis.overall_severity.value,
             "summary": diagnosis.summary,
+            "llm_narrative": diagnosis.llm_narrative,
+            "recommended_actions": diagnosis.recommended_actions,
             "timestamp": diagnosis.timestamp.isoformat(),
             "total_duration_ms": diagnosis.total_duration_ms,
             "checks": [

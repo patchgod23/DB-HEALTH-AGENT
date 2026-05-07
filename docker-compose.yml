@@ -16,8 +16,6 @@ services:
       - ./backend/servers.yaml:/app/servers.yaml:ro
       - ./backend/app:/app/app:ro
       - ./backend/main.py:/app/main.py:ro
-    ports:
-      - "8000:8000"
     command: python main.py
     restart: "no"
 
@@ -38,7 +36,7 @@ services:
       - ./backend/app:/app/app:ro
       - ./backend/main.py:/app/main.py:ro
     ports:
-      - "8000:8000"
+      - "8001:8000"
     command: python main.py --loop
     restart: unless-stopped
 
@@ -49,9 +47,13 @@ services:
     build: ./backend
     image: db-health-agent-backend:latest
     container_name: db-health-agent-api
+    env_file:
+      - .env
     volumes:
       - ./backend/logs:/app/logs:ro
+      - ./backend/app:/app/app:ro
       - ./backend/api:/app/api:ro
+      - ./backend/servers.yaml:/app/servers.yaml:ro
     ports:
       - "8080:8080"
     command: python api/main.py

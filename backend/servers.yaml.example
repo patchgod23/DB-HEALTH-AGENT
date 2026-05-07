@@ -1,0 +1,41 @@
+# servers.yaml.example — db-health-agent server configuration
+# Define your server list here (structure only — no credentials recommended here, use .env).
+
+thresholds:
+  latency_warning_ms: 1000
+  latency_critical_ms: 3000
+  freshness_warning_hours: 24
+  freshness_critical_hours: 48
+  rowcount_warning_drop_pct: 10
+  rowcount_critical_drop_pct: 30
+  connect_timeout_sec: 5
+  error_warning_count: 5
+  error_critical_count: 20
+
+log_dir: logs
+log_format: json
+run_interval_sec: 60
+alert_on_recovery: true
+
+servers:
+  - id: demo-db-01
+    host: localhost
+    port: 1433
+    database: DemoDB_01
+    username: sa
+    password: "" # Use .env for real passwords: DB_DEMO_DB_01_PASSWORD
+    enabled: true
+    heuristic_profile: rolling
+    ignore_freshness_tables:
+      - temp_table
+    table_profiles:
+      orders: rolling
+      catalog: static
+
+  - id: demo-db-02
+    host: 127.0.0.1
+    database: DemoDB_02
+    username: sa
+    password: ""
+    enabled: true
+    heuristic_profile: static

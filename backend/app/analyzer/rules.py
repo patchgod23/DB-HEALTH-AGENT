@@ -81,5 +81,22 @@ def analyze(diagnosis: ServerDiagnosis) -> ServerDiagnosis:
             line += f" → {rec}"
         lines.append(line)
 
+    # Lógica de Mantenimiento Sugerido (Afinada)
+    size_check = next((c for c in diagnosis.checks if c.check_name == "database_size"), None)
+    if size_check and isinstance(size_check.value, dict):
+        data_gb = size_check.value.get("data_gb", 0)
+        log_gb = size_check.value.get("log_gb", 0)
+        
+        # Solo sugerimos limpieza si el DATA pasa de 4GB
+        if data_gb > 4.0:
+            diagnosis.recommended_actions.append("3.limpiezaMXP.sql")
+            diagnosis.recommended_actions.append("4.ReindexarTablas.sql")
+            lines.append(f"📢 [SUGERENCIA] DATA pesado ({data_gb:.2f}GB). Se recomienda Limpieza y Reindexación.")
+            
+        # Sugerimos Shrink si el LOG pasa de 0.5GB
+        if log_gb > 0.5:
+            diagnosis.recommended_actions.append("5.ShrinkDB.sql")
+            lines.append(f"📢 [SUGERENCIA] LOG pesado ({log_gb:.2f}GB). Se recomienda ejecutar ShrinkDB.sql.")
+
     diagnosis.summary = "\n".join(lines)
     return diagnosis
